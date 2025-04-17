@@ -9,9 +9,9 @@ tf.disable_v2_behavior()
 
 def main():
     # === Set the input and output paths ===
-    input_image_path = 'test1.jpg'   # <-- Your input image
-    output_image_path = 'enhanced_test1.jpg'  # <-- Save result here
-    checkpoint_dir = './checkpoint'  # <-- Where your model weights are
+    input_image_path = 'test1.jpg'  
+    output_image_path = 'enhanced_test1.jpg'  
+    checkpoint_dir = './checkpoint'  
 
     # === Load image ===
     if not os.path.exists(input_image_path):
