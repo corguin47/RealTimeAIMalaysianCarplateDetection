@@ -9,22 +9,18 @@ from torchvision import transforms
 from torchvision.models.detection import retinanet_resnet50_fpn, RetinaNet_ResNet50_FPN_Weights
 from torchvision.transforms import functional as F
 from torch.utils.data import Dataset, DataLoader, Subset, random_split
+import torch.nn as nn
+
+# === Constants ===
+# Check DEVICE (CUDA or CPU)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 ANNOTATION_FILE = 'C:/Users/austi/Downloads/retina/_annotations.coco.json'
 IMAGE_DIR = 'C:/Users/austi/Downloads/retina/images'
-TOTAL_DATASET_NUMBER = 200
+TOTAL_DATASET_NUMBER = 2000
 VALIDATION_RATIO = 0.2
-BATCH_SIZE = 4
-EPOCHS = 10
-
-# Check device (CUDA or CPU)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Load pretrained RetinaNet model (cleaned up warning)
-weights = RetinaNet_ResNet50_FPN_Weights.DEFAULT
-model = retinanet_resnet50_fpn(weights=weights)
-model.to(device)
-model.train()
+BATCH_SIZE = 8
+EPOCHS = 5
 
 class CustomCocoDataset(Dataset):
     def __init__(self, coco_annotations_file, image_dir, transform=None):
@@ -64,6 +60,54 @@ class CustomCocoDataset(Dataset):
     def __len__(self):
         return len(self.image_ids)
 
+# === Validation Function ===
+def validate(model, val_loader):
+    model.eval()
+    val_loss = 0.0
+    with torch.no_grad():
+        for images, targets in val_loader:
+            images = [img.to(DEVICE) for img in images]
+            targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+
+            model.train()
+            loss_dict = model(images, targets)
+            model.eval()
+
+            val_loss += sum(loss for loss in loss_dict.values()).item()
+
+    return val_loss / len(val_loader)
+
+# === Load Pre-trained Model ===
+# Load pretrained RetinaNet
+model = retinanet_resnet50_fpn(weights=RetinaNet_ResNet50_FPN_Weights.COCO_V1)
+
+# Modify only the LAST conv layer of classification head
+num_classes = 3  # (background + car + plate)
+
+cls_logits = model.head.classification_head.cls_logits
+
+in_channels = cls_logits.in_channels
+num_anchors = model.head.classification_head.num_anchors
+
+new_cls_logits = nn.Conv2d(
+    in_channels, 
+    num_anchors * num_classes, 
+    kernel_size=3, 
+    stride=1, 
+    padding=1
+)
+
+# Replace the cls_logits
+model.head.classification_head.cls_logits = new_cls_logits
+
+# Important!! Also update the num_classes attribute!!
+model.head.classification_head.num_classes = num_classes
+
+# Move to GPU
+model = model.to(DEVICE)
+
+
+# === Load Dataset ===
 # Load full dataset
 full_dataset = CustomCocoDataset(ANNOTATION_FILE, IMAGE_DIR)
 
@@ -80,24 +124,7 @@ train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, co
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=lambda x: tuple(zip(*x)))
 
 # Optimizer
-optimizer = optim.Adam(model.parameters(), lr=1e-5)
-
-# === Validation Function ===
-def validate(model, val_loader):
-    model.eval()
-    val_loss = 0.0
-    with torch.no_grad():
-        for images, targets in val_loader:
-            images = [img.to(device) for img in images]
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-            model.train()
-            loss_dict = model(images, targets)
-            model.eval()
-
-            val_loss += sum(loss for loss in loss_dict.values()).item()
-
-    return val_loss / len(val_loader)
+optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
 
 
 # === Training Loop ===
@@ -106,8 +133,8 @@ for epoch in range(EPOCHS):
     running_loss = 0.0
     print(f"\nEpoch {epoch+1}/{EPOCHS}")
     for images, targets in tqdm(train_loader, desc=f"Training", unit="batch"):
-        images = [img.to(device) for img in images]
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        images = [img.to(DEVICE) for img in images]
+        targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
 
         optimizer.zero_grad()
         loss_dict = model(images, targets)
@@ -122,24 +149,3 @@ for epoch in range(EPOCHS):
 
 # Save model
 torch.save(model.state_dict(), 'retinanet_finetuned.pth')
-
-# === Inference Function ===
-def inference(model, image_path):
-    model.eval()
-    image = Image.open(image_path).convert("RGB")
-    image_tensor = F.to_tensor(image).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        prediction = model(image_tensor)
-
-    boxes = prediction[0]['boxes']
-    labels = prediction[0]['labels']
-    scores = prediction[0]['scores']
-
-    keep = scores > 0.5
-    return boxes[keep], labels[keep]
-
-# Example
-# image_path = 'path/to/test_image.jpg'
-# boxes, labels = inference(model, image_path)
-# print(f"Boxes: {boxes}\nLabels: {labels}")
