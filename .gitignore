@@ -1,0 +1,7 @@
+yolo11n.pt
+ObjectDetection/YoloV11/YoloV11Dataset
+runs/
+ObjectDetection/Retina/Models/
+CharacterRecognition/object_detection/dataset
+CharacterRecognition/object_detection/model
+ObjectDetection/Retina/final-dataset.v2i.coco
