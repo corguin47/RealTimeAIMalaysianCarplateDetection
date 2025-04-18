@@ -33,7 +33,7 @@ while True:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
     # Display the frame
-    cv2.imshow("YOLOv8 Screen Detection", frame)
+    cv2.imshow("YOLOv11 Screen Detection", frame)
 
     # Press 'q' to quit
     if cv2.waitKey(1) & 0xFF == ord("q"):
