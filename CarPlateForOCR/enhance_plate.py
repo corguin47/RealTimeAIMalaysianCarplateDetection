@@ -9,8 +9,8 @@ tf.disable_v2_behavior()
 
 def main():
     # === Set the input and output paths ===
-    input_image_path = 'test1.jpg'  
-    output_image_path = 'enhanced_test1.jpg'  
+    input_image_path = 'ADD6379.jpg'  
+    output_image_path = 'enhanced_ADD6379.jpg'  
     checkpoint_dir = './checkpoint'  
 
     # === Load image ===
