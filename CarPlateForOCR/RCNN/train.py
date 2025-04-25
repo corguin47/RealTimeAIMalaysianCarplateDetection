@@ -3,9 +3,12 @@ import re
 import math
 import random
 from PIL import Image
+import matplotlib
 
 # Enable synchronous CUDA errors
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'  # Temporary fix for OpenMP error
+matplotlib.use('Agg')  # Use a non-interactive backend for plotting
 
 import torch
 import torchvision
