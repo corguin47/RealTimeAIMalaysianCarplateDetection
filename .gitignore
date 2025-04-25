@@ -2,3 +2,4 @@ ObjectDetection/YoloV11/YoloV11Dataset
 ObjectDetection/Retina/Models/
 ObjectDetection/Retina/final-dataset.v2i.coco
 runs/
+CarPlateForOCR/RCNN/Dataset
