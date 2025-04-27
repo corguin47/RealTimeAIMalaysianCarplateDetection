@@ -1,4 +1,5 @@
 import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 import cv2
 import easyocr
 import matplotlib.pyplot as plt
@@ -8,7 +9,7 @@ import matplotlib.pyplot as plt
 reader = easyocr.Reader(['en'], gpu=True)
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-image_path = os.path.join(current_dir, "test1.jpg")
+image_path = os.path.join(current_dir, "crop_00017_0.png")
 
 # 🔍 OCR Prediction Function
 def easyocr_predict_single(image_path):
