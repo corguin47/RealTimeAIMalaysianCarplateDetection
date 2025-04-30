@@ -4,6 +4,9 @@ import math
 import random
 from PIL import Image
 import matplotlib
+from sklearn.metrics import confusion_matrix, classification_report, precision_recall_curve, average_precision_score
+import seaborn as sns
+import numpy as np
 
 # Enable synchronous CUDA errors
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -24,13 +27,13 @@ OUTPUT_DIR = './checkpoints'
 
 # Model & training hyperparameters
 NUM_CLASSES = 37               # 36 char classes + background
-NUM_EPOCHS = 100               # number of epochs
+NUM_EPOCHS = 200               # number of epochs
 LEARNING_RATE = 5e-4           # initial learning rate
 MOMENTUM = 0.9                 # for SGD
 WEIGHT_DECAY = 5e-4
 
 # Optimizer choice: 'sgd' or 'adamw'
-OPTIMIZER = 'sgd'
+OPTIMIZER = 'adamw'
 
 # LR scheduler parameters
 LR_SCHEDULER = 'cosine'       # options: 'step', 'cosine'
@@ -38,15 +41,111 @@ STEP_SIZE = 10
 GAMMA = 0.5
 
 # Data & augmentation
-BATCH_SIZE = 4                 # default batch size
+BATCH_SIZE = 2                 # default batch size
 NUM_WORKERS = 0                # set >0 for performance once stable
-ANCHOR_SIZES = ((4, 8, 16),)
+ANCHOR_SIZES = ((2, 4, 8, 16),)
 ROTATION_ANGLE = 15.0
 BRIGHTNESS_RANGE = (0.7, 1.3)
 CONTRAST_RANGE = (0.7, 1.3)
 SATURATION_RANGE = (0.7, 1.3)
 HUE_RANGE = (-0.05, 0.05)
 
+
+from torchvision.ops import box_iou
+
+def inference_collect(model, loader, dev, iou_thresh=0.5):
+    model.eval()
+    all_preds, all_labels = [], []
+    with torch.no_grad():
+        for imgs, targets in loader:
+            imgs = [img.to(dev) for img in imgs]
+            outputs = model(imgs)
+            for output, target in zip(outputs, targets):
+                pred_boxes = output['boxes'].cpu()
+                pred_labels = output['labels'].cpu()
+                true_boxes = target['boxes']
+                true_labels = target['labels']
+
+                if len(pred_boxes) == 0 and len(true_boxes) == 0:
+                    continue  # nothing to match
+
+                if len(pred_boxes) == 0:
+                    # all ground-truths are missed
+                    for true_label in true_labels:
+                        all_preds.append(0)  # background
+                        all_labels.append(true_label.item())
+                    continue
+
+                if len(true_boxes) == 0:
+                    # all detections are false positives
+                    for pred_label in pred_labels:
+                        all_preds.append(pred_label.item())
+                        all_labels.append(0)  # background
+                    continue
+
+                ious = box_iou(pred_boxes, true_boxes)
+                matched_pred_idx = ious.argmax(dim=1)
+                matched_ious = ious.max(dim=1).values
+
+                matched_true_idx = ious.argmax(dim=0)
+                matched_true_ious = ious.max(dim=0).values
+
+                matched_preds = set()
+                matched_trues = set()
+
+                for pred_idx, iou in enumerate(matched_ious):
+                    if iou >= iou_thresh:
+                        true_idx = matched_pred_idx[pred_idx].item()
+                        all_preds.append(pred_labels[pred_idx].item())
+                        all_labels.append(true_labels[true_idx].item())
+                        matched_preds.add(pred_idx)
+                        matched_trues.add(true_idx)
+
+                # False Positives (predictions with no matching GT)
+                for pred_idx in range(len(pred_boxes)):
+                    if pred_idx not in matched_preds:
+                        all_preds.append(pred_labels[pred_idx].item())
+                        all_labels.append(0)  # background
+
+                # False Negatives (GT with no matching prediction)
+                for true_idx in range(len(true_boxes)):
+                    if true_idx not in matched_trues:
+                        all_preds.append(0)  # background
+                        all_labels.append(true_labels[true_idx].item())
+
+    return np.array(all_labels), np.array(all_preds)
+
+
+def plot_confusion_matrix(y_true, y_pred, output_dir):
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(12,10))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    plt.savefig(os.path.join(output_dir, 'confusion_matrix.png'))
+    print(f"Saved confusion matrix to {output_dir}")
+
+
+def plot_precision_recall(y_true, y_pred, output_dir):
+    # One-vs-Rest PR curve for multi-class
+    classes = np.unique(np.concatenate((y_true, y_pred)))
+    plt.figure(figsize=(12,10))
+    for c in classes:
+        y_true_c = (y_true == c).astype(int)
+        y_pred_c = (y_pred == c).astype(int)
+        if y_true_c.sum() == 0:
+            continue
+        precision, recall, _ = precision_recall_curve(y_true_c, y_pred_c)
+        ap = average_precision_score(y_true_c, y_pred_c)
+        plt.plot(recall, precision, label=f'Class {c} (AP={ap:.2f})')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(output_dir, 'precision_recall_curve.png'))
+    print(f"Saved precision-recall curve to {output_dir}")
 
 def collate_fn(batch):
     return tuple(zip(*batch))
@@ -158,6 +257,18 @@ def evaluate(model, loader, dev):
     print("Final evaluation done")
 
 
+def evaluate_loss(model, loader, dev):
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for imgs, targs in loader:
+            imgs = [i.to(dev) for i in imgs]
+            targs = [{k: v.to(dev) for k, v in tar.items()} for tar in targs]
+            loss_dict = model(imgs, targs)
+            total_loss += sum(loss_dict.values()).item()
+    return total_loss / len(loader)
+
+
 def main():
     dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -204,15 +315,44 @@ def main():
     # Training loop
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     train_losses = []
+    val_losses = []
+    best_val_loss = float('inf')
+    best_epoch = -1
+
     for e in range(1, NUM_EPOCHS + 1):
-        loss = train_one_epoch(model, opt, train_loader, dev, e)
-        train_losses.append(loss)
+        train_loss = train_one_epoch(model, opt, train_loader, dev, e)
+        train_losses.append(train_loss)
         sched.step()
+
+        # # Evaluate val loss every 5 epochs
+        # if test_loader and e % 5 == 0:
+        #     val_loss = evaluate_loss(model, test_loader, dev)
+        #     val_losses.append((e, val_loss))
+        #     print(f"[Val @ Epoch {e}] Loss: {val_loss:.4f}")
+
+        #     if val_loss < best_val_loss:
+        #         best_val_loss = val_loss
+        #         best_epoch = e
+        #         torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, 'best_model.pth'))
+        #         print(f"✅ Best model updated (epoch {e})")
 
     # Final evaluation
     if test_loader:
         print("Running final evaluation...")
         evaluate(model, test_loader, dev)
+        y_true, y_pred = inference_collect(model, test_loader, dev)
+
+        # Save confusion matrix
+        plot_confusion_matrix(y_true, y_pred, OUTPUT_DIR)
+
+        # Save classification report
+        report = classification_report(y_true, y_pred, labels=list(range(NUM_CLASSES)), digits=4, zero_division=0)
+        with open(os.path.join(OUTPUT_DIR, 'classification_report.txt'), 'w') as f:
+            f.write(report)
+        print(f"Saved classification report to {OUTPUT_DIR}")
+
+        # Save Precision-Recall Curve
+        plot_precision_recall(y_true, y_pred, OUTPUT_DIR)
 
     # Save final model
     state_path = os.path.join(OUTPUT_DIR, 'model_final.pth')
@@ -221,16 +361,21 @@ def main():
     torch.save(model, model_path)
     print(f"Saved final state to {state_path} and model to {model_path}")
 
-    # Plot training loss curve
+    # Plot training and validation loss curves
     plt.figure()
-    plt.plot(range(1, NUM_EPOCHS + 1), train_losses, marker='o')
+    plt.plot(range(1, NUM_EPOCHS + 1), train_losses, label='Train Loss', marker='o')
+    if val_losses:
+        val_epochs, val_vals = zip(*val_losses)
+        plt.plot(val_epochs, val_vals, label='Validation Loss', marker='x')
     plt.xlabel('Epoch')
-    plt.ylabel('Training Loss')
-    plt.title('Training Loss Curve')
+    plt.ylabel('Loss')
+    plt.title('Training vs Validation Loss')
     plt.grid(True)
-    loss_plot = os.path.join(OUTPUT_DIR, 'loss_curve.png')
+    plt.legend()
+    loss_plot = os.path.join(OUTPUT_DIR, 'train_val_loss_curve.png')
     plt.savefig(loss_plot)
     print(f"Saved loss curve to {loss_plot}")
+
 
 if __name__ == '__main__':
     main()
