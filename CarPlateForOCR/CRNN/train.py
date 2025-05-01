@@ -1,0 +1,257 @@
+import os
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from PIL import Image
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import seaborn as sns
+from torch.nn.utils.rnn import pack_padded_sequence
+from crnn import CRNN
+import csv
+from torch.optim.lr_scheduler import OneCycleLR
+
+# === CONFIG ===
+TRAIN_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\CRNN\Dataset\train'
+TEST_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\CRNN\Dataset\test'
+OUTPUT_DIR = './CarPlateForOCR/CRNN/models/trained_crnn_checkpoints'
+NUM_EPOCHS = 150
+BATCH_SIZE = 8
+LEARNING_RATE = 1e-4
+NH = 1024  #  hidden dim (CRNN capacity to model character dependencies)
+OPTIMIZER_TYPE = 'adamw'  # 'adam', 'adamw', or 'sgd'
+IMG_HEIGHT = 32
+IMG_WIDTH = 320
+CHARACTERS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+BLANK_LABEL = 0  # For CTC blank
+CHAR2IDX = {ch: i + 1 for i, ch in enumerate(CHARACTERS)}
+IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}
+IDX2CHAR[BLANK_LABEL] = ''
+
+# === DATASET ===
+class PlateSequenceDataset(Dataset):
+    def __init__(self, img_dir):
+        self.img_dir = img_dir
+        self.image_files = [f for f in os.listdir(img_dir) if f.endswith(('.jpg', '.png'))]
+        self.transform = transforms.Compose([
+            transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
+            transforms.Grayscale(),
+            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
+            transforms.RandomAffine(degrees=3, translate=(0.02, 0.02), scale=(0.95, 1.05), shear=2),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,))
+        ])
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        fname = self.image_files[idx]
+        img_path = os.path.join(self.img_dir, fname)
+        img = Image.open(img_path).convert('RGB')
+        img = self.transform(img)
+        label_str = os.path.splitext(fname)[0]
+        label_str = ''.join(filter(str.isalnum, label_str)).upper()
+        label = torch.tensor([CHAR2IDX[ch] for ch in label_str], dtype=torch.long)
+        return img, label, len(label), label_str
+
+# === DECODE FUNCTION ===
+def decode_preds(preds):
+    preds = preds.argmax(2).permute(1, 0)  # [B, T]
+    decoded = []
+    for pred in preds:
+        prev = -1
+        chars = []
+        for p in pred:
+            p = p.item()
+            if p != prev and p != BLANK_LABEL:
+                chars.append(IDX2CHAR[p])
+            prev = p
+        decoded.append(''.join(chars))
+    return decoded
+
+def evaluate_model(model, test_loader, device):
+    model.eval()
+    all_preds, all_labels = [], []
+    def cer(s1, s2):
+        import editdistance
+        return editdistance.eval(s1, s2) / max(1, len(s2))
+
+    with torch.no_grad():
+        for imgs, _, _, label_strs in test_loader:
+            imgs = imgs.to(device)
+            outputs = model(imgs)
+            preds = decode_preds(outputs.cpu())
+            all_preds.extend(preds)
+            all_labels.extend(label_strs)
+
+    cer_scores = [cer(p, t) for p, t in zip(all_preds, all_labels)]
+    avg_cer = sum(cer_scores) / len(cer_scores)
+    print(f"Test CER: {avg_cer:.4f}")
+
+    acc = sum([p == t for p, t in zip(all_preds, all_labels)]) / len(all_preds)
+    print(f"Test Exact Match Accuracy: {acc:.4f}")
+
+    total_chars = sum(len(t) for t in all_labels)
+    correct_chars = sum(c1 == c2 for pred, gt in zip(all_preds, all_labels) for c1, c2 in zip(pred, gt))
+    char_acc = correct_chars / total_chars
+    print(f"Character-Level Accuracy: {char_acc:.4f}")
+
+    worst = sorted(zip(all_labels, all_preds, cer_scores), key=lambda x: -x[2])[:10]
+    with open(os.path.join(OUTPUT_DIR, 'worst_errors.csv'), 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Ground Truth', 'Prediction', 'CER'])
+        writer.writerows(worst)
+
+    true_first = [t[0] if t else '?' for t in all_labels]
+    pred_first = [p[0] if p else '?' for p in all_preds]
+    cm = confusion_matrix(true_first, pred_first, labels=list(CHARACTERS))
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=list(CHARACTERS), yticklabels=list(CHARACTERS))
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Test Set Confusion Matrix (First Char Only)')
+    plt.savefig(os.path.join(OUTPUT_DIR, 'test_confusion_matrix.png'))
+    plt.close()
+
+    with open(os.path.join(OUTPUT_DIR, 'test_predictions.csv'), 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Ground Truth', 'Prediction'])
+        writer.writerows(zip(all_labels, all_preds))
+
+    # Classification report (character-level)
+    y_true_chars, y_pred_chars = [], []
+    for gt, pred in zip(all_labels, all_preds):
+        min_len = min(len(gt), len(pred))
+        y_true_chars.extend(gt[:min_len])
+        y_pred_chars.extend(pred[:min_len])
+    report = classification_report(y_true_chars, y_pred_chars, labels=list(CHARACTERS), digits=4)
+    print("Character Classification Report:")
+    print(report)
+    with open(os.path.join(OUTPUT_DIR, 'char_classification_report.txt'), 'w') as f:
+        f.write(report)
+
+def save_training_config(final_loss, final_cer):
+    config_path = os.path.join(OUTPUT_DIR, 'training_config.txt')
+    with open(config_path, 'w') as f:
+        f.write(f"NUM_EPOCHS = {NUM_EPOCHS}\n")
+        f.write(f"BATCH_SIZE = {BATCH_SIZE}\n")
+        f.write(f"LEARNING_RATE = {LEARNING_RATE}\n")
+        f.write(f"CRNN MODEL NH = {NH}\n")
+        f.write(f"OPTIMIZER_TYPE = {OPTIMIZER_TYPE}\n")
+        f.write(f"IMG_HEIGHT = {IMG_HEIGHT}\n")
+        f.write(f"IMG_WIDTH = {IMG_WIDTH}\n")
+        f.write(f"CHARACTERS = {CHARACTERS}\n")
+        f.write(f"FINAL_EPOCH = {NUM_EPOCHS}\n")
+        f.write(f"FINAL_LOSS = {final_loss:.4f}\n")
+        f.write(f"FINAL_CER = {final_cer:.4f}\n")
+
+
+# === TRAIN ===
+def train():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    train_ds = PlateSequenceDataset(TRAIN_IMG_DIR)
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+
+    model = CRNN(IMG_HEIGHT, 1, len(CHARACTERS) + 1, NH).to(device)
+    criterion = nn.CTCLoss(blank=BLANK_LABEL, zero_infinity=True)
+
+    if OPTIMIZER_TYPE == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+
+    elif OPTIMIZER_TYPE == 'adamw':
+        optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+        scheduler = OneCycleLR(optimizer, max_lr=LEARNING_RATE,
+                               steps_per_epoch=len(train_loader),
+                               epochs=NUM_EPOCHS,
+                               pct_start=0.1, anneal_strategy='cos')
+
+    elif OPTIMIZER_TYPE == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+
+    else:
+        raise ValueError(f"Unsupported optimizer type: {OPTIMIZER_TYPE}")
+
+    all_losses = []
+    all_cers = []
+
+    def cer(s1, s2):
+        import editdistance
+        return editdistance.eval(s1, s2) / max(1, len(s2))
+
+    for epoch in range(1, NUM_EPOCHS + 1):
+        model.train()
+        total_loss = 0
+        total_cer = 0
+        num_samples = 0
+
+        for imgs, labels, label_lens, label_strs in train_loader:
+            imgs = imgs.to(device)
+            labels_flatten = torch.cat(labels).to(device)
+            label_lens_tensor = torch.tensor(label_lens, dtype=torch.long)
+
+            outputs = model(imgs)  # [T, B, C]
+            T, B, C = outputs.size()
+            input_lens = torch.full(size=(B,), fill_value=T, dtype=torch.long)
+
+            loss = criterion(outputs, labels_flatten, input_lens, label_lens_tensor)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+            with torch.no_grad():
+                preds = decode_preds(outputs.cpu())
+                batch_cer = sum(cer(p, t) for p, t in zip(preds, label_strs))
+                total_cer += batch_cer
+                num_samples += len(label_strs)
+
+        epoch_loss = total_loss / len(train_loader)
+        epoch_cer = total_cer / num_samples
+        all_losses.append(epoch_loss)
+        all_cers.append(epoch_cer)
+        scheduler.step()
+
+        print(f"Epoch {epoch}/{NUM_EPOCHS} Loss: {epoch_loss:.4f} CER: {epoch_cer:.4f}")
+
+    # Save model
+    torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, 'model_final.pth'))
+    
+    save_training_config(epoch_loss, epoch_cer)
+
+    # Plot training curves
+    plt.figure()
+    plt.plot(range(1, NUM_EPOCHS + 1), all_losses, marker='o', label='Loss')
+    plt.plot(range(1, NUM_EPOCHS + 1), all_cers, marker='x', label='CER')
+    plt.title('Training Loss & CER Curve')
+    plt.xlabel('Epoch')
+    plt.ylabel('Value')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(OUTPUT_DIR, 'training_loss_cer.png'))
+    plt.close()
+
+
+# === Collate ===
+def collate_fn(batch):
+    imgs, labels, label_lens, label_strs = zip(*batch)
+    return torch.stack(imgs), labels, label_lens, label_strs
+
+if __name__ == '__main__':
+    train()
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = CRNN(IMG_HEIGHT, 1, len(CHARACTERS) + 1, NH).to(device)
+    model.load_state_dict(torch.load(os.path.join(OUTPUT_DIR, 'model_final.pth'), map_location=device))
+
+    test_ds = PlateSequenceDataset(TEST_IMG_DIR)
+    test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, collate_fn=collate_fn)
+    evaluate_model(model, test_loader, device)
