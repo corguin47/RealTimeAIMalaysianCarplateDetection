@@ -3,7 +3,7 @@ import cv2
 import tensorflow.compat.v1 as tf
 import numpy as np
 
-from retinex_enhancer import RetinexEnhancer
+from NightImageEnhancer.retinex_enhancer import RetinexEnhancer
 
 tf.disable_v2_behavior()
 
