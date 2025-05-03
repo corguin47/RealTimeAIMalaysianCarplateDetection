@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 # === CONFIG ===
 MODEL_PATH = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\CRNN\models\trained_crnn_checkpoints\model_final.pth'
-IMAGE_PATH = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\CRNN\Dataset\test\MDT8815.png'
+IMAGE_PATH = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test\MDT8815.png'
 CHARACTERS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 BLANK_LABEL = 0
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}

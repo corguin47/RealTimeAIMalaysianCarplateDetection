@@ -14,8 +14,8 @@ import csv
 from torch.optim.lr_scheduler import OneCycleLR
 
 # === CONFIG ===
-TRAIN_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\CRNN\Dataset\train'
-TEST_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\CRNN\Dataset\test'
+TRAIN_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
+TEST_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test'
 OUTPUT_DIR = './CarPlateForOCR/CRNN/models/trained_crnn_checkpoints'
 NUM_EPOCHS = 150
 BATCH_SIZE = 8

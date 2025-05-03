@@ -1,8 +1,9 @@
 ObjectDetection/YoloV11/YoloV11Dataset
 ObjectDetection/Retina/Models/
 ObjectDetection/Retina/final-dataset.v2i.coco
-runs/
-CarPlateForOCR/CRNN/Dataset
+runs/detect
+CarPlateForOCR/Dataset
 checkpoints_adam_opt
 checkpoints_sgd_opt
 CarPlateForOCR/CRNN/models
+paddle_env
