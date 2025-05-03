@@ -1,5 +1,6 @@
 ObjectDetection/YoloV11/YoloV11Dataset
 ObjectDetection/Retina/Models/
+ObjectDetection/YoloV11/Models/
 ObjectDetection/Retina/final-dataset.v2i.coco
 runs/detect
 CarPlateForOCR/Dataset

@@ -13,7 +13,7 @@ from transformers import (
 # === CONFIG ===
 MODEL_NAME = "microsoft/trocr-base-stage1"
 TRAIN_DIR = r"C:\Users\NITRO 5\OneDrive - Swinburne Sarawak\General - COS30018 INTELLIGENT SYSTEMS\Dataset\OCR\Combined\train"
-VAL_DIR   = r"C:\Users\NITRO 5\OneDrive - Swinburne Sarawak\General - COS30018 INTELLIGENT SYSTEMS\Dataset\OCR\Combined\test"
+TEST_DIR   = r"C:\Users\NITRO 5\OneDrive - Swinburne Sarawak\General - COS30018 INTELLIGENT SYSTEMS\Dataset\OCR\Combined\test"
 OUTPUT_DIR = "./trocr_plate_model"
 EPOCHS = 1
 BATCH_SIZE = 1
@@ -58,7 +58,7 @@ model.config.vocab_size = model.config.decoder.vocab_size
 
 # === LOAD DATASETS ===
 train_dataset = PlateOCRDataset(TRAIN_DIR, processor)
-val_dataset = PlateOCRDataset(VAL_DIR, processor)
+test_dataset = PlateOCRDataset(TEST_DIR, processor)
 
 # === TRAINING ARGS ===
 training_args = Seq2SeqTrainingArguments(
@@ -81,7 +81,7 @@ trainer = Seq2SeqTrainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
-    eval_dataset=val_dataset,
+    eval_dataset=test_dataset,
     tokenizer=processor.tokenizer,
     data_collator=default_data_collator, 
 )
