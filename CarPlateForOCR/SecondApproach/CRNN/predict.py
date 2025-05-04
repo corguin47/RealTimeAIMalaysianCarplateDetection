@@ -9,15 +9,15 @@ from crnn import CRNN
 import matplotlib.pyplot as plt
 
 # === CONFIG ===
-MODEL_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\trained_crnn_checkpoints\model_final.pth'
-IMAGE_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train\ADD6379.jpg'
+MODEL_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\model_final.pth'
+IMAGE_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test\RM2285.png'
 CHARACTERS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 BLANK_LABEL = 0
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR[BLANK_LABEL] = ''
 
 # adjust based on training
-NH = 1024 
+NH = 128
 IMG_HEIGHT = 32
 IMG_WIDTH = 320
 
