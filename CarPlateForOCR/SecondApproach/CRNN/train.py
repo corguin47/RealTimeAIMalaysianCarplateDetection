@@ -13,6 +13,7 @@ from crnn import CRNN
 import csv
 from torch.optim.lr_scheduler import OneCycleLR
 from collections import Counter
+from pyctcdecode import build_ctcdecoder
 
 # === CONFIG ===
 TRAIN_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
@@ -30,6 +31,32 @@ BLANK_LABEL = 0  # For CTC blank
 CHAR2IDX = {ch: i + 1 for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR[BLANK_LABEL] = ''
+USEBEAM = False  # Set to True if you want to use beam search decoding, otherwise use greedy decoding
+
+# === DECODERS ===
+decoder = build_ctcdecoder(labels=[""] + list(CHARACTERS), kenlm_model_path=None)
+
+def decode_preds_beam(log_probs):
+    results = []
+    probs = log_probs.permute(1, 0, 2)
+    for p in probs:
+        decoded = decoder.decode(p.cpu().numpy())
+        results.append(decoded)
+    return results
+
+def decode_preds_greedy(preds):
+    preds = preds.argmax(2).permute(1, 0)
+    decoded = []
+    for pred in preds:
+        prev = -1
+        chars = []
+        for p in pred:
+            p = p.item()
+            if p != prev and p != BLANK_LABEL:
+                chars.append(IDX2CHAR[p])
+            prev = p
+        decoded.append(''.join(chars))
+    return decoded
 
 # === DATASET ===
 class PlateSequenceDataset(Dataset):
@@ -91,7 +118,8 @@ def decode_preds(preds):
         decoded.append(''.join(chars))
     return decoded
 
-def evaluate_model(model, test_loader, device):
+# === EVALUATE ===
+def evaluate_model(model, test_loader, device, use_beam=False):
     model.eval()
     all_preds, all_labels = [], []
     def cer(s1, s2):
@@ -102,7 +130,8 @@ def evaluate_model(model, test_loader, device):
         for imgs, _, _, label_strs in test_loader:
             imgs = imgs.to(device)
             outputs = model(imgs)
-            preds = decode_preds(outputs.cpu())
+            outputs = outputs.log_softmax(2)
+            preds = decode_preds_beam(outputs) if use_beam else decode_preds_greedy(outputs)
             all_preds.extend(preds)
             all_labels.extend(label_strs)
 
@@ -140,7 +169,6 @@ def evaluate_model(model, test_loader, device):
         writer.writerow(['Ground Truth', 'Prediction'])
         writer.writerows(zip(all_labels, all_preds))
 
-    # Classification report (character-level)
     y_true_chars, y_pred_chars = [], []
     for gt, pred in zip(all_labels, all_preds):
         min_len = min(len(gt), len(pred))
@@ -163,6 +191,7 @@ def save_training_config(final_loss, final_cer):
         f.write(f"IMG_HEIGHT = {IMG_HEIGHT}\n")
         f.write(f"IMG_WIDTH = {IMG_WIDTH}\n")
         f.write(f"CHARACTERS = {CHARACTERS}\n")
+        f.write(f"USEBEAM = {USEBEAM}\n")
         f.write(f"FINAL_EPOCH = {NUM_EPOCHS}\n")
         f.write(f"FINAL_LOSS = {final_loss:.4f}\n")
         f.write(f"FINAL_CER = {final_cer:.4f}\n")
@@ -270,4 +299,4 @@ if __name__ == '__main__':
 
     test_ds = PlateSequenceDataset(TEST_IMG_DIR)
     test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, collate_fn=collate_fn)
-    evaluate_model(model, test_loader, device)
+    evaluate_model(model, test_loader, device, USE_BEAM)
