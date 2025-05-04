@@ -1,6 +1,7 @@
 import os
 from PIL import Image
 import torch
+from torchvision import transforms
 from torch.utils.data import Dataset
 from transformers import (
     TrOCRProcessor,
@@ -8,21 +9,30 @@ from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     default_data_collator,
+    EarlyStoppingCallback
 )
 
 # === CONFIG ===
-MODEL_NAME = "microsoft/trocr-base-stage1"
-TRAIN_DIR = r"C:\Users\NITRO 5\OneDrive - Swinburne Sarawak\General - COS30018 INTELLIGENT SYSTEMS\Dataset\OCR\Combined\train"
-TEST_DIR   = r"C:\Users\NITRO 5\OneDrive - Swinburne Sarawak\General - COS30018 INTELLIGENT SYSTEMS\Dataset\OCR\Combined\test"
-OUTPUT_DIR = "./trocr_plate_model"
-EPOCHS = 1
-BATCH_SIZE = 1
-LEARNING_RATE = 5e-5
+MODEL_NAME = "microsoft/trocr-small-handwritten"
+TRAIN_DIR = r"D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train"
+TEST_DIR   = r"D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test"
+OUTPUT_DIR = "./CarPlateForOCR/SecondApproach/TrOCR/Models"
+EPOCHS = 30
+BATCH_SIZE = 8
+LEARNING_RATE = 3e-5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print("CUDA available:", torch.cuda.is_available())
 print("CUDA version:", torch.version.cuda)
 print("GPU device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+
+# === AUGMENTATION ===
+augment = transforms.Compose([
+    transforms.RandomRotation(5),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.RandomAffine(5, translate=(0.05, 0.05)),
+    transforms.GaussianBlur(3)
+])
 
 # === DATASET ===
 class PlateOCRDataset(Dataset):
@@ -43,6 +53,7 @@ class PlateOCRDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
         image = Image.open(item["image_path"]).convert("RGB")
+        image = augment(image)
         encoding = self.processor(images=image, text=item["text"], return_tensors="pt", padding="max_length", truncation=True)
         encoding = {k: v.squeeze(0) for k, v in encoding.items()}
         return encoding
@@ -72,8 +83,14 @@ training_args = Seq2SeqTrainingArguments(
     save_total_limit=2,
     num_train_epochs=EPOCHS,
     learning_rate=LEARNING_RATE,
+    warmup_steps=100,
+    lr_scheduler_type="linear",
     logging_dir=f"{OUTPUT_DIR}/logs",
     fp16=torch.cuda.is_available(),  
+    eval_strategy="steps",
+    load_best_model_at_end=True,
+    metric_for_best_model="loss",
+    greater_is_better=False,
 )
 
 # === TRAINER ===
@@ -83,11 +100,12 @@ trainer = Seq2SeqTrainer(
     train_dataset=train_dataset,
     eval_dataset=test_dataset,
     tokenizer=processor.tokenizer,
-    data_collator=default_data_collator, 
+    data_collator=default_data_collator,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
 )
 
 # === START TRAINING ===
 if __name__ == "__main__":
-    trainer.train()
+    trainer.train(resume_from_checkpoint=False)
     model.save_pretrained(OUTPUT_DIR)
     processor.save_pretrained(OUTPUT_DIR)

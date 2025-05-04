@@ -14,9 +14,9 @@ import csv
 from torch.optim.lr_scheduler import OneCycleLR
 
 # === CONFIG ===
-TRAIN_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
-TEST_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test'
-OUTPUT_DIR = './CarPlateForOCR/CRNN/models/trained_crnn_checkpoints'
+TRAIN_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
+TEST_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test'
+OUTPUT_DIR = './CarPlateForOCR/SecondApproach/CRNN/Models/trained_crnn_checkpoints'
 NUM_EPOCHS = 150
 BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
@@ -148,7 +148,6 @@ def save_training_config(final_loss, final_cer):
         f.write(f"FINAL_LOSS = {final_loss:.4f}\n")
         f.write(f"FINAL_CER = {final_cer:.4f}\n")
 
-
 # === TRAIN ===
 def train():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -238,7 +237,6 @@ def train():
     plt.legend()
     plt.savefig(os.path.join(OUTPUT_DIR, 'training_loss_cer.png'))
     plt.close()
-
 
 # === Collate ===
 def collate_fn(batch):

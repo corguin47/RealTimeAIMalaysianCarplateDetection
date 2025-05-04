@@ -9,17 +9,17 @@ from crnn import CRNN
 import matplotlib.pyplot as plt
 
 # === CONFIG ===
-MODEL_PATH = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\CRNN\models\trained_crnn_checkpoints\model_final.pth'
-IMAGE_PATH = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test\MDT8815.png'
+MODEL_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\trained_crnn_checkpoints\model_final.pth'
+IMAGE_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train\ADD6379.jpg'
 CHARACTERS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 BLANK_LABEL = 0
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR[BLANK_LABEL] = ''
 
 # adjust based on training
-NH = 512 
+NH = 1024 
 IMG_HEIGHT = 32
-IMG_WIDTH = 256
+IMG_WIDTH = 320
 
 # === Utilities ===
 def decode_prediction(preds):
@@ -63,11 +63,11 @@ def predict(image_path, model_path):
     plt.title("Transformed Image Before Inference")
     plt.axis('off')
     plt.show()
-    
 
-    model = CRNN(IMG_HEIGHT, 1, len(CHARACTERS) + 1, NH).to(device)
-    state_dict = torch.load(model_path, map_location=device)
+    model = CRNN(IMG_HEIGHT, 1, len(CHARACTERS) + 1, NH)
+    state_dict = torch.load(model_path, map_location='cpu', weights_only=False)
     model.load_state_dict(state_dict)
+    model.to(device)
     model.eval()
 
     with torch.no_grad():
