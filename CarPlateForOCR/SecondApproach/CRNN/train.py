@@ -13,6 +13,9 @@ from crnn import CRNN
 import csv
 from torch.optim.lr_scheduler import OneCycleLR
 from collections import Counter
+from pyctcdecode import build_ctcdecoder
+import random
+
 
 # === CONFIG ===
 TRAIN_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
@@ -30,6 +33,20 @@ BLANK_LABEL = 0  # For CTC blank
 CHAR2IDX = {ch: i + 1 for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR[BLANK_LABEL] = ''
+USE_BEAM = True  # Use beam search decoding for CTC
+CTC_VOCAB_STRING = " " + CHARACTERS  # '' for blank (index 0)
+beam_decoder = build_ctcdecoder(
+    labels=[' '] + list(CHARACTERS[:-1]) 
+)
+
+def set_seed(seed=42):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(42)
 
 # === DATASET ===
 class PlateSequenceDataset(Dataset):
@@ -91,9 +108,19 @@ def decode_preds(preds):
         decoded.append(''.join(chars))
     return decoded
 
-def evaluate_model(model, test_loader, device):
+def decode_preds_beam(log_probs):
+    log_probs = log_probs.permute(1, 0, 2)  # [B, T, C]
+    decoded = []
+    for lp in log_probs:
+        beam_result = beam_decoder.decode(lp.cpu().numpy())
+        decoded.append(beam_result)
+    return decoded
+
+
+def evaluate_model(model, test_loader, device, use_beam=False):
     model.eval()
     all_preds, all_labels = [], []
+    
     def cer(s1, s2):
         import editdistance
         return editdistance.eval(s1, s2) / max(1, len(s2))
@@ -102,7 +129,10 @@ def evaluate_model(model, test_loader, device):
         for imgs, _, _, label_strs in test_loader:
             imgs = imgs.to(device)
             outputs = model(imgs)
-            preds = decode_preds(outputs.cpu())
+            if use_beam:
+                preds = decode_preds_beam(outputs.cpu().log_softmax(2))  # for CTC decoder
+            else:
+                preds = decode_preds(outputs.cpu())
             all_preds.extend(preds)
             all_labels.extend(label_strs)
 
@@ -166,6 +196,7 @@ def save_training_config(final_loss, final_cer):
         f.write(f"FINAL_EPOCH = {NUM_EPOCHS}\n")
         f.write(f"FINAL_LOSS = {final_loss:.4f}\n")
         f.write(f"FINAL_CER = {final_cer:.4f}\n")
+        f.write(f"USE_BEAM = {USE_BEAM}\n")
 
 # === TRAIN ===
 def train():
@@ -270,4 +301,4 @@ if __name__ == '__main__':
 
     test_ds = PlateSequenceDataset(TEST_IMG_DIR)
     test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, collate_fn=collate_fn)
-    evaluate_model(model, test_loader, device)
+    evaluate_model(model, test_loader, device, USE_BEAM)

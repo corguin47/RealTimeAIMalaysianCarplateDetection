@@ -9,7 +9,7 @@ from crnn import CRNN
 import matplotlib.pyplot as plt
 
 # === CONFIG ===
-MODEL_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\model_final.pth'
+MODEL_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\Archieve\model_final.pth'
 IMAGE_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test\RM2285.png'
 CHARACTERS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 BLANK_LABEL = 0
