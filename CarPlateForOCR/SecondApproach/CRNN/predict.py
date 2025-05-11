@@ -9,8 +9,8 @@ from crnn import CRNN
 import matplotlib.pyplot as plt
 
 # === CONFIG ===
-MODEL_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\Archieve\model_final.pth'
-IMAGE_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test\RM2285.png'
+MODEL_PATH = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\BeamSearch\model_final.pth'
+IMAGE_PATH = r'C:\Users\User\Downloads\test\Plate_Number_(QAB_4838_E).jpg'
 CHARACTERS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 BLANK_LABEL = 0
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}

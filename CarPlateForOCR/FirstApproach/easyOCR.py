@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 reader = easyocr.Reader(['en'], gpu=True)
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-image_path = os.path.join(current_dir, "crop_00017_0.png")
+# image_path = os.path.join(current_dir, "crop_00017_0.png")
+image_path = r"C:\Users\User\Downloads\test\Plate_Number_(QAB_4838_E).jpg"
 
 # 🔍 OCR Prediction Function
 def easyocr_predict_single(image_path):

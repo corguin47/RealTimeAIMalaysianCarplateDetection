@@ -8,3 +8,4 @@ ObjectDetection/YoloV11/YoloV11Dataset
 ObjectDetection/Retina/final-dataset.v2i.coco
 ObjectDetection/Retina/Models/
 trocr_env
+CarPlateForOCR/SecondApproach/TrOCR/Models/
