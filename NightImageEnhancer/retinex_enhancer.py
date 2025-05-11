@@ -3,13 +3,13 @@ import numpy as np
 import cv2
 import os
 
-from model import lowlight_enhance   # <-- Import CLASS directly from model.py (this is correct)
+from model import lowlight_enhance   
 from utils import load_images
 
 tf.disable_v2_behavior()
 
 class RetinexEnhancer:
-    def __init__(self, checkpoint_dir='./checkpoint', use_gpu=False):
+    def __init__(self, checkpoint_dir='./checkpoint', use_gpu=True):
         self.checkpoint_dir = checkpoint_dir
         self.use_gpu = use_gpu
         self._build_session()
