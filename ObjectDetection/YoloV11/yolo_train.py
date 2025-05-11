@@ -6,7 +6,7 @@ def main():
     model = YOLO("yolo11n.pt")  # load a pretrained model 
     model = YOLO("yolo11n.yaml").load("yolo11n.pt")  # build from YAML and transfer weights
 
-    dataset_path = r"C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\ObjectDetection\YoloV11\YoloV11Dataset\data.yaml"
+    dataset_path = r"D:\RealTimeAIMalaysianCarplateDetection\ObjectDetection\YoloV11\YoloV11Dataset\data.yaml"
 
     # Train the model (configs documentation: https://docs.ultralytics.com/modes/train/#train-settings)
     model.tune(
