@@ -1,7 +1,7 @@
 import os
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from PIL import Image
 import numpy as np
@@ -12,15 +12,19 @@ from torch.nn.utils.rnn import pack_padded_sequence
 from crnn import CRNN
 import csv
 from torch.optim.lr_scheduler import OneCycleLR
+from collections import Counter
+from pyctcdecode import build_ctcdecoder
+import random
+
 
 # === CONFIG ===
-TRAIN_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
-TEST_IMG_DIR = r'C:\Users\User\Downloads\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test'
-OUTPUT_DIR = './CarPlateForOCR/CRNN/models/trained_crnn_checkpoints'
-NUM_EPOCHS = 150
+TRAIN_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
+TEST_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test'
+OUTPUT_DIR = './CarPlateForOCR/SecondApproach/CRNN/Models'
+NUM_EPOCHS = 200
 BATCH_SIZE = 8
-LEARNING_RATE = 1e-4
-NH = 1024  #  hidden dim (CRNN capacity to model character dependencies)
+LEARNING_RATE = 1e-3
+NH = 128  #  hidden dim (CRNN capacity to model character dependencies) + use small because dataset is small
 OPTIMIZER_TYPE = 'adamw'  # 'adam', 'adamw', or 'sgd'
 IMG_HEIGHT = 32
 IMG_WIDTH = 320
@@ -29,6 +33,20 @@ BLANK_LABEL = 0  # For CTC blank
 CHAR2IDX = {ch: i + 1 for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR[BLANK_LABEL] = ''
+USE_BEAM = True  # Use beam search decoding for CTC
+CTC_VOCAB_STRING = " " + CHARACTERS  # '' for blank (index 0)
+beam_decoder = build_ctcdecoder(
+    labels=[' '] + list(CHARACTERS[:-1]) 
+)
+
+def set_seed(seed=42):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(42)
 
 # === DATASET ===
 class PlateSequenceDataset(Dataset):
@@ -38,10 +56,15 @@ class PlateSequenceDataset(Dataset):
         self.transform = transforms.Compose([
             transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
             transforms.Grayscale(),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
-            transforms.RandomAffine(degrees=3, translate=(0.02, 0.02), scale=(0.95, 1.05), shear=2),
             transforms.ToTensor(),
-            transforms.Normalize((0.5,), (0.5,))
+            transforms.Normalize((0.5,), (0.5,)),
+            
+            
+            # === (too excessive) ===
+            # transforms.RandomRotation(degrees=5, fill=(255,)),
+            # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            # transforms.RandomAffine(degrees=5, translate=(0.03, 0.03), scale=(0.9, 1.1), shear=5),
+            # transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
         ])
 
     def __len__(self):
@@ -56,6 +79,19 @@ class PlateSequenceDataset(Dataset):
         label_str = ''.join(filter(str.isalnum, label_str)).upper()
         label = torch.tensor([CHAR2IDX[ch] for ch in label_str], dtype=torch.long)
         return img, label, len(label), label_str
+
+# === WEIGHTED SAMPLER OVER ALL CHARACTERS ===
+def get_weighted_sampler(dataset):
+    char_freq = Counter()
+    for _, _, _, label_str in dataset:
+        char_freq.update(label_str)
+    total_chars = sum(char_freq.values())
+    char_weights = {ch: total_chars / char_freq[ch] for ch in char_freq}
+    sample_weights = []
+    for _, _, _, label_str in dataset:
+        weight = sum(char_weights.get(ch, 0) for ch in label_str) / len(label_str)
+        sample_weights.append(weight)
+    return WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
 
 # === DECODE FUNCTION ===
 def decode_preds(preds):
@@ -72,9 +108,19 @@ def decode_preds(preds):
         decoded.append(''.join(chars))
     return decoded
 
-def evaluate_model(model, test_loader, device):
+def decode_preds_beam(log_probs):
+    log_probs = log_probs.permute(1, 0, 2)  # [B, T, C]
+    decoded = []
+    for lp in log_probs:
+        beam_result = beam_decoder.decode(lp.cpu().numpy())
+        decoded.append(beam_result)
+    return decoded
+
+
+def evaluate_model(model, test_loader, device, use_beam=False):
     model.eval()
     all_preds, all_labels = [], []
+    
     def cer(s1, s2):
         import editdistance
         return editdistance.eval(s1, s2) / max(1, len(s2))
@@ -83,7 +129,10 @@ def evaluate_model(model, test_loader, device):
         for imgs, _, _, label_strs in test_loader:
             imgs = imgs.to(device)
             outputs = model(imgs)
-            preds = decode_preds(outputs.cpu())
+            if use_beam:
+                preds = decode_preds_beam(outputs.cpu().log_softmax(2))  # for CTC decoder
+            else:
+                preds = decode_preds(outputs.cpu())
             all_preds.extend(preds)
             all_labels.extend(label_strs)
 
@@ -147,7 +196,7 @@ def save_training_config(final_loss, final_cer):
         f.write(f"FINAL_EPOCH = {NUM_EPOCHS}\n")
         f.write(f"FINAL_LOSS = {final_loss:.4f}\n")
         f.write(f"FINAL_CER = {final_cer:.4f}\n")
-
+        f.write(f"USE_BEAM = {USE_BEAM}\n")
 
 # === TRAIN ===
 def train():
@@ -155,7 +204,8 @@ def train():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     train_ds = PlateSequenceDataset(TRAIN_IMG_DIR)
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+    sampler = get_weighted_sampler(train_ds)
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=sampler, collate_fn=collate_fn)
 
     model = CRNN(IMG_HEIGHT, 1, len(CHARACTERS) + 1, NH).to(device)
     criterion = nn.CTCLoss(blank=BLANK_LABEL, zero_infinity=True)
@@ -166,10 +216,8 @@ def train():
 
     elif OPTIMIZER_TYPE == 'adamw':
         optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-        scheduler = OneCycleLR(optimizer, max_lr=LEARNING_RATE,
-                               steps_per_epoch=len(train_loader),
-                               epochs=NUM_EPOCHS,
-                               pct_start=0.1, anneal_strategy='cos')
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
+
 
     elif OPTIMIZER_TYPE == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9)
@@ -239,7 +287,6 @@ def train():
     plt.savefig(os.path.join(OUTPUT_DIR, 'training_loss_cer.png'))
     plt.close()
 
-
 # === Collate ===
 def collate_fn(batch):
     imgs, labels, label_lens, label_strs = zip(*batch)
@@ -254,4 +301,4 @@ if __name__ == '__main__':
 
     test_ds = PlateSequenceDataset(TEST_IMG_DIR)
     test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, collate_fn=collate_fn)
-    evaluate_model(model, test_loader, device)
+    evaluate_model(model, test_loader, device, USE_BEAM)
