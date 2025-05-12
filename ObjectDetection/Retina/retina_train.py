@@ -8,19 +8,19 @@ import torch.optim as optim
 from torchvision import transforms
 from torchvision.models.detection import retinanet_resnet50_fpn, RetinaNet_ResNet50_FPN_Weights
 from torchvision.transforms import functional as F
-from torch.utils.data import Dataset, DataLoader, Subset, random_split
+from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
+import matplotlib.pyplot as plt
 
 # === Constants ===
-# Check DEVICE (CUDA or CPU)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-ANNOTATION_FILE = 'C:/Users/austi/Downloads/retina/_annotations.coco.json'
-IMAGE_DIR = 'C:/Users/austi/Downloads/retina/images'
-TOTAL_DATASET_NUMBER = 2000
-VALIDATION_RATIO = 0.2
+TRAIN_ANNOTATION_FILE = r'D:/RealTimeAIMalaysianCarplateDetection/ObjectDetection/Retina/final-dataset.v6i.coco/train/_annotations.coco.json'
+TEST_ANNOTATION_FILE = r'D:/RealTimeAIMalaysianCarplateDetection/ObjectDetection/Retina/final-dataset.v6i.coco/test/_annotations.coco.json'
+IMAGE_DIR = r'D:/RealTimeAIMalaysianCarplateDetection/ObjectDetection/Retina/final-dataset.v6i.coco'
 BATCH_SIZE = 8
-EPOCHS = 5
+EPOCHS = 20
+PATIENCE = 5  # early stopping patience
 
 class CustomCocoDataset(Dataset):
     def __init__(self, coco_annotations_file, image_dir, transform=None):
@@ -35,18 +35,17 @@ class CustomCocoDataset(Dataset):
         image_path = os.path.join(self.image_dir, img_info['file_name'])
         image = Image.open(image_path).convert("RGB")
         annotations = self.coco.loadAnns(self.coco.getAnnIds(imgIds=[img_id]))
-        
+
         boxes = []
         labels = []
         for ann in annotations:
             boxes.append(ann['bbox'])
             labels.append(ann['category_id'])
-        
-        boxes = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
-        boxes[:, 2] = boxes[:, 0] + boxes[:, 2]  # x_max = x + width
-        boxes[:, 3] = boxes[:, 1] + boxes[:, 3]  # y_max = y + height
 
-        # Optional: Filter invalid boxes
+        boxes = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+        boxes[:, 2] = boxes[:, 0] + boxes[:, 2]  # x_max
+        boxes[:, 3] = boxes[:, 1] + boxes[:, 3]  # y_max
+
         keep = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
         boxes = boxes[keep]
         labels = torch.tensor(labels, dtype=torch.int64)[keep]
@@ -54,78 +53,39 @@ class CustomCocoDataset(Dataset):
         if self.transforms:
             image = self.transforms(image)
 
-        target = {"boxes": boxes, "labels": labels}
+        target = {"boxes": boxes, "labels": labels, "image_id": torch.tensor([img_id])}
         return image, target
 
     def __len__(self):
         return len(self.image_ids)
 
-# === Validation Function ===
-def validate(model, val_loader):
-    model.eval()
-    val_loss = 0.0
-    with torch.no_grad():
-        for images, targets in val_loader:
-            images = [img.to(DEVICE) for img in images]
-            targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+# === Load Datasets ===
+train_dataset = CustomCocoDataset(TRAIN_ANNOTATION_FILE, os.path.join(IMAGE_DIR, "train"))
+test_dataset = CustomCocoDataset(TEST_ANNOTATION_FILE, os.path.join(IMAGE_DIR, "test"))
 
-            model.train()
-            loss_dict = model(images, targets)
-            model.eval()
-
-            val_loss += sum(loss for loss in loss_dict.values()).item()
-
-    return val_loss / len(val_loader)
-
-# === Load Pre-trained Model ===
-# Load pretrained RetinaNet
-model = retinanet_resnet50_fpn(weights=RetinaNet_ResNet50_FPN_Weights.COCO_V1)
-
-# Modify only the LAST conv layer of classification head
-num_classes = 3  # (background + car + plate)
-
-cls_logits = model.head.classification_head.cls_logits
-
-in_channels = cls_logits.in_channels
-num_anchors = model.head.classification_head.num_anchors
-
-new_cls_logits = nn.Conv2d(
-    in_channels, 
-    num_anchors * num_classes, 
-    kernel_size=3, 
-    stride=1, 
-    padding=1
-)
-
-# Replace the cls_logits
-model.head.classification_head.cls_logits = new_cls_logits
-
-# Important!! Also update the num_classes attribute!!
-model.head.classification_head.num_classes = num_classes
-
-# Move to GPU
-model = model.to(DEVICE)
-
-
-# === Load Dataset ===
-# Load full dataset
-full_dataset = CustomCocoDataset(ANNOTATION_FILE, IMAGE_DIR)
-
-# Subsample only N training images
-subsample_dataset = Subset(full_dataset, random.sample(range(len(full_dataset)), TOTAL_DATASET_NUMBER))
-
-# Split into train + val
-val_size = int(len(subsample_dataset) * VALIDATION_RATIO)
-train_size = len(subsample_dataset) - val_size
-train_dataset, val_dataset = random_split(subsample_dataset, [train_size, val_size])
-
-# DataLoaders
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=lambda x: tuple(zip(*x)))
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=lambda x: tuple(zip(*x)))
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=lambda x: tuple(zip(*x)))
 
-# Optimizer
-optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
+# === Model ===
+model = retinanet_resnet50_fpn(weights=RetinaNet_ResNet50_FPN_Weights.COCO_V1)
+num_classes = 3  # background + car + plate
+in_channels = model.head.classification_head.cls_logits.in_channels
+num_anchors = model.head.classification_head.num_anchors
+model.head.classification_head.cls_logits = nn.Conv2d(in_channels, num_anchors * num_classes, kernel_size=3, stride=1, padding=1)
+model.head.classification_head.num_classes = num_classes
+model.to(DEVICE)
 
+# === Optimizer & Scheduler ===
+optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+
+# === Metrics ===
+metric = MeanAveragePrecision()
+train_losses = []
+val_maps = []
+best_map = 0.0
+best_epoch = 0
+patience_counter = 0
 
 # === Training Loop ===
 for epoch in range(EPOCHS):
@@ -141,11 +101,61 @@ for epoch in range(EPOCHS):
         losses = sum(loss for loss in loss_dict.values())
         losses.backward()
         optimizer.step()
+
         running_loss += losses.item()
 
     train_loss = running_loss / len(train_loader)
-    val_loss = validate(model, val_loader)
-    print(f"Train Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f}")
+    train_losses.append(train_loss)
 
-# Save model
-torch.save(model.state_dict(), 'retinanet_finetuned.pth')
+    # === Validation mAP ===
+    model.eval()
+    metric.reset()
+    with torch.no_grad():
+        for images, targets in tqdm(test_loader, desc="Validating", unit="batch"):
+            images = [img.to(DEVICE) for img in images]
+            targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+            outputs = model(images)
+            metric.update(outputs, targets)
+
+    val_metrics = metric.compute()
+    val_map = val_metrics['map'].item()
+    val_maps.append(val_map)
+    print(f"Train Loss: {train_loss:.4f} | Validation mAP: {val_map:.4f}")
+
+    # === Save best model ===
+    if val_map > best_map:
+        best_map = val_map
+        best_epoch = epoch + 1
+        torch.save(model.state_dict(), 'retinanet_best.pth')
+        patience_counter = 0
+    else:
+        patience_counter += 1
+        if patience_counter >= PATIENCE:
+            print("Early stopping triggered.")
+            break
+
+    scheduler.step()
+
+# === Final Save ===
+torch.save(model.state_dict(), 'retinanet_last.pth')
+
+# === Plot and Save Training Curves ===
+plt.figure()
+plt.plot(range(1, len(train_losses) + 1), train_losses, label='Train Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Training Loss over Epochs')
+plt.legend()
+plt.grid(True)
+plt.savefig('retinanet_train_loss.png')
+
+plt.figure()
+plt.plot(range(1, len(val_maps) + 1), val_maps, label='Validation mAP')
+plt.xlabel('Epoch')
+plt.ylabel('mAP')
+plt.title('Validation mAP over Epochs')
+plt.legend()
+plt.grid(True)
+plt.savefig('retinanet_val_map.png')
+
+print(f"Best Validation mAP: {best_map:.4f} at epoch {best_epoch}")
