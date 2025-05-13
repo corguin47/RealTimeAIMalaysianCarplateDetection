@@ -1,10 +1,8 @@
 from ultralytics import YOLO
 
 def main():
-    # Load a model
-    model = YOLO("yolo11n.yaml")  # build a new model from YAML
-    model = YOLO("yolo11n.pt")  # load a pretrained model 
-    model = YOLO("yolo11n.yaml").load("yolo11n.pt")  # build from YAML and transfer weights
+    # Load pretrained model to fine-tune (downloadable from https://github.com/ultralytics/ultralytics?tab=readme-ov-file)
+    model = YOLO("yolo11n.pt")
 
     dataset_path = r"D:\RealTimeAIMalaysianCarplateDetection\ObjectDetection\YoloV11\YoloV11Dataset\data.yaml"
 
@@ -17,10 +15,10 @@ def main():
         val=True, 
         plots=True, 
         device="0",
-        optimizer="AdamW"
+        optimizer="AdamW",
     )
     
-    results = model.train()
+    results = model.train(plots=True)
 
 if __name__ == "__main__":
     main()

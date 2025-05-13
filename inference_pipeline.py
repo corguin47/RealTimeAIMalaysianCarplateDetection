@@ -10,13 +10,14 @@ from ultralytics import YOLO
 import easyocr
 from collections import deque, Counter, defaultdict
 import re
+import tkinter as tk
+from tkinter import filedialog, ttk
+from tkinter import messagebox
 
 # ==== CONFIGURATION ====
 USE_GPU = torch.cuda.is_available()
 YOLO_MODEL_PATH = r"D:\RealTimeAIMalaysianCarplateDetection\ObjectDetection\YoloV11\Models\yolo11n_finetuned.pt"
 DETECTION_CONF = 0.25
-
-# Toggles
 SAVE_CROPS = False
 USE_CAR_FILTER = False
 USE_PREPROCESS = True
@@ -27,7 +28,6 @@ USE_LOW_LIGHT_ENHANCE = False
 gamma_value = 1.2
 ocr_buffers = defaultdict(lambda: deque(maxlen=7))
 
-# ==== LOW LIGHT ENHANCEMENT ====
 def retinex_enhance(img, sigma=30):
     img = img.astype(np.float32) + 1.0
     log_img = np.log(img)
@@ -53,10 +53,10 @@ def gamma_correction(img, gamma=1.5):
 
 def enhance_low_light_image(img):
     img = retinex_enhance(img, sigma=30)
-    img = clahe_enhance(img, clip_limit=2.0, tile_grid_size=(8,8))
+    img = clahe_enhance(img, clip_limit=2.0, tileGridSize=(8,8))
     return gamma_correction(img, gamma=1.5)
 
-# ==== EASYOCR INIT ====
+# OCR setup
 easyocr_reader = easyocr.Reader(
     ['en'],
     recog_network='ocr_ft',
@@ -65,15 +65,12 @@ easyocr_reader = easyocr.Reader(
     user_network_directory=r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\FirstApproach\user_network'
 )
 
-# ==== MONITOR & MODEL ====
-display_monitor = {"top": 100, "left": 100, "width": 800, "height": 600}
-sct = mss.mss()
+# Load YOLO model
 yolo = YOLO(YOLO_MODEL_PATH)
 CLASS_NAMES = yolo.names
 PLATE_CLASS_IDS = [cid for cid, nm in CLASS_NAMES.items() if 'plate' in nm.lower()]
 CAR_CLASS_IDS = [cid for cid, nm in CLASS_NAMES.items() if 'car' in nm.lower() and cid not in PLATE_CLASS_IDS]
 
-# === Helpers ===
 def is_inside(plate_box, car_box):
     x1, y1, x2, y2 = plate_box
     cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
@@ -111,48 +108,109 @@ def clean_plate_text(text):
     prefix, digits, suffix = match.groups()
     return (prefix or "") + digits + (suffix or "") if (prefix or suffix) else ""
 
-# ==== MAIN LOOP ====
-if __name__ == '__main__':
-    print(f"OCR using fine-tuned EasyOCR on {'GPU' if USE_GPU else 'CPU'} | Classes={CLASS_NAMES}")
-    cv2.namedWindow('Pipeline', cv2.WINDOW_NORMAL)
-    frame_idx = 0
+def process_frame(frame, frame_idx=0, use_buffer=True):
+    detections = yolo(frame, stream=True, conf=DETECTION_CONF)
+    results = [
+        {'cls': int(b.cls[0]), 'label': CLASS_NAMES[int(b.cls[0])], 'conf': float(b.conf[0]), 'box': tuple(map(int, b.xyxy[0]))}
+        for r in detections for b in r.boxes
+    ]
+    car_boxes = [d['box'] for d in results if d['cls'] in CAR_CLASS_IDS]
+    plates = [d for d in results if d['cls'] in PLATE_CLASS_IDS]
+    valid = [p for p in plates if not USE_CAR_FILTER or any(is_inside(p['box'], cb) for cb in car_boxes)]
 
-    while True:
-        img = np.array(sct.grab(display_monitor))
-        frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-
-        results = yolo(frame, stream=True, conf=DETECTION_CONF)
-        detections = [
-            {'cls': int(b.cls[0]), 'label': CLASS_NAMES[int(b.cls[0])], 'conf': float(b.conf[0]), 'box': tuple(map(int, b.xyxy[0]))}
-            for r in results for b in r.boxes
-        ]
-
-        car_boxes = [d['box'] for d in detections if d['cls'] in CAR_CLASS_IDS]
-        plates = [d for d in detections if d['cls'] in PLATE_CLASS_IDS]
-        valid = [p for p in plates if not USE_CAR_FILTER or any(is_inside(p['box'], cb) for cb in car_boxes)]
-
-        for idx, p in enumerate(valid):
-            x1, y1, x2, y2 = p['box']
-            crop = frame[y1:y2, x1:x2]
-            if crop.size == 0 or is_blurry(crop):
-                continue
-            dirty_txt = ocr_plate(crop)
-            txt = clean_plate_text(dirty_txt)
-            if not txt:
-                continue
-            box_id = (x1, y1, x2, y2)
+    for idx, p in enumerate(valid):
+        x1, y1, x2, y2 = p['box']
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0 or is_blurry(crop):
+            continue
+        dirty_txt = ocr_plate(crop)
+        txt = clean_plate_text(dirty_txt)
+        if not txt:
+            continue
+        box_id = (x1, y1, x2, y2)
+        if use_buffer:
             ocr_buffers[box_id].append(txt)
             most_common, count = Counter(ocr_buffers[box_id]).most_common(1)[0]
             final_text = most_common if count >= 5 else ""
+        else:
+            final_text = txt
+        cv2.putText(frame, final_text, (x1+5, y2-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
+    return frame
 
-            print(f"[Frame {frame_idx}] Text: {txt} | Blur: {cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var():.1f}")
-            if SAVE_CROPS:
-                cv2.imwrite(os.path.join('plate_crops', f"crop_{frame_idx:05d}_{idx}.png"), crop)
-            cv2.putText(frame, final_text, (x1+5, y2-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
+def process_image():
+    path = filedialog.askopenfilename(title="Select an image")
+    if not path:
+        return
+    img = cv2.imread(path)
+    result = process_frame(img, use_buffer=False) # Disable buffer for single image
+    cv2.imshow("Image Result", result)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
-        frame_idx += 1
-        cv2.imshow('Pipeline', frame)
+def process_video():
+    path = filedialog.askopenfilename(title="Select a video")
+    if not path:
+        return
+    cap = cv2.VideoCapture(path)
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        result = process_frame(frame)
+        resized_result = cv2.resize(result, (960, 540))
+        cv2.imshow("Video Result", resized_result)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-
+    cap.release()
     cv2.destroyAllWindows()
+
+def process_realtime():
+    display_monitor = {"top": 100, "left": 100, "width": 800, "height": 600}
+    sct = mss.mss()
+    cv2.namedWindow('Pipeline', cv2.WINDOW_NORMAL)
+    frame_idx = 0
+    while True:
+        img = np.array(sct.grab(display_monitor))
+        frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        result = process_frame(frame, frame_idx)
+        frame_idx += 1
+        cv2.imshow('Pipeline', result)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    cv2.destroyAllWindows()
+
+def main_gui():
+    def on_select(event=None):
+        mode = combo.get()
+        if mode.lower() == 'image':
+            process_image()
+        elif mode.lower() == 'video':
+            process_video()
+        elif mode.lower() == 'realtime':
+            process_realtime()
+        combo.set('Select mode')  # reset dropdown for next selection
+
+    def on_quit():
+        root.quit()
+        root.destroy()
+
+    root = tk.Tk()
+    root.title("Detection Mode Selector")
+
+    label = tk.Label(root, text="Select detection mode:")
+    label.pack(pady=10)
+
+    combo = ttk.Combobox(root, values=["Image", "Video", "Realtime"], state="readonly")
+    combo.pack(padx=20, pady=5)
+    combo.bind("<<ComboboxSelected>>", on_select)
+
+    quit_button = tk.Button(root, text="Quit", command=on_quit)
+    quit_button.pack(pady=10)
+
+    root.mainloop()
+
+if __name__ == '__main__':
+    while True:
+        main_gui()
+        break
