@@ -26,7 +26,8 @@ USE_LOW_LIGHT_ENHANCE = False
 
 # Globals
 gamma_value = 1.2
-ocr_buffers = defaultdict(lambda: deque(maxlen=7))
+ocr_buffers = defaultdict(lambda: deque(maxlen=3))
+stable_predictions = {}
 
 def retinex_enhance(img, sigma=30):
     img = img.astype(np.float32) + 1.0
@@ -131,7 +132,13 @@ def process_frame(frame, frame_idx=0, use_buffer=True):
         if use_buffer:
             ocr_buffers[box_id].append(txt)
             most_common, count = Counter(ocr_buffers[box_id]).most_common(1)[0]
-            final_text = most_common if count >= 5 else ""
+
+            # Confirm only if majority is strong enough
+            if count >= 3:
+                stable_predictions[box_id] = most_common
+
+            # Use stable result if available, otherwise fallback to current
+            final_text = stable_predictions.get(box_id, txt)
         else:
             final_text = txt
         cv2.putText(frame, final_text, (x1+5, y2-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
