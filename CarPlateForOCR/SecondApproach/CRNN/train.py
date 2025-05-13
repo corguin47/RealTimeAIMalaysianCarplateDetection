@@ -20,7 +20,7 @@ import random
 # === CONFIG ===
 TRAIN_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\train'
 TEST_IMG_DIR = r'D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\Dataset\test'
-OUTPUT_DIR = './CarPlateForOCR/SecondApproach/CRNN/Models'
+OUTPUT_DIR = './CarPlateForOCR/SecondApproach/CRNN/Models/test'
 NUM_EPOCHS = 200
 BATCH_SIZE = 8
 LEARNING_RATE = 1e-3
@@ -34,6 +34,7 @@ CHAR2IDX = {ch: i + 1 for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR = {i + 1: ch for i, ch in enumerate(CHARACTERS)}
 IDX2CHAR[BLANK_LABEL] = ''
 USE_BEAM = True  # Use beam search decoding for CTC
+USE_WEIGHTED_SAMPLER = False
 CTC_VOCAB_STRING = " " + CHARACTERS  # '' for blank (index 0)
 beam_decoder = build_ctcdecoder(
     labels=[' '] + list(CHARACTERS[:-1]) 
@@ -204,8 +205,12 @@ def train():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     train_ds = PlateSequenceDataset(TRAIN_IMG_DIR)
-    sampler = get_weighted_sampler(train_ds)
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=sampler, collate_fn=collate_fn)
+    
+    if USE_WEIGHTED_SAMPLER:
+        sampler = get_weighted_sampler(train_ds)
+        train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=sampler, collate_fn=collate_fn)
+    else:
+        train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
 
     model = CRNN(IMG_HEIGHT, 1, len(CHARACTERS) + 1, NH).to(device)
     criterion = nn.CTCLoss(blank=BLANK_LABEL, zero_infinity=True)
