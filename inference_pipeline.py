@@ -13,6 +13,7 @@ import re
 import tkinter as tk
 from tkinter import filedialog, ttk
 from tkinter import messagebox
+import csv
 
 # ==== CONFIGURATION ====
 USE_GPU = torch.cuda.is_available()
@@ -22,7 +23,7 @@ SAVE_CROPS = False
 USE_CAR_FILTER = False
 USE_PREPROCESS = True
 DEBUG_OCR_CROP = True
-USE_LOW_LIGHT_ENHANCE = False
+USE_LOW_LIGHT_ENHANCE = True
 
 # Globals
 gamma_value = 1.2
@@ -54,7 +55,7 @@ def gamma_correction(img, gamma=1.5):
 
 def enhance_low_light_image(img):
     img = retinex_enhance(img, sigma=30)
-    img = clahe_enhance(img, clip_limit=2.0, tileGridSize=(8,8))
+    img = clahe_enhance(img, clip_limit=2.0, tile_grid_size=(8,8))
     return gamma_correction(img, gamma=1.5)
 
 # OCR setup
@@ -119,6 +120,7 @@ def process_frame(frame, frame_idx=0, use_buffer=True):
     plates = [d for d in results if d['cls'] in PLATE_CLASS_IDS]
     valid = [p for p in plates if not USE_CAR_FILTER or any(is_inside(p['box'], cb) for cb in car_boxes)]
 
+    predictions = []
     for idx, p in enumerate(valid):
         x1, y1, x2, y2 = p['box']
         crop = frame[y1:y2, x1:x2]
@@ -132,26 +134,39 @@ def process_frame(frame, frame_idx=0, use_buffer=True):
         if use_buffer:
             ocr_buffers[box_id].append(txt)
             most_common, count = Counter(ocr_buffers[box_id]).most_common(1)[0]
-
-            # Confirm only if majority is strong enough
             if count >= 3:
                 stable_predictions[box_id] = most_common
-
-            # Use stable result if available, otherwise fallback to current
             final_text = stable_predictions.get(box_id, txt)
         else:
             final_text = txt
+        predictions.append((f"{x1},{y1},{x2},{y2}", final_text))
         cv2.putText(frame, final_text, (x1+5, y2-5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
-    return frame
+    return frame, predictions
+
+def process_folder():
+    folder = filedialog.askdirectory(title="Select Folder of Images")
+    if not folder:
+        return
+    output_path = os.path.join(folder, "predictions.txt")
+    with open(output_path, 'w') as f:
+        for fname in sorted(os.listdir(folder)):
+            if fname.lower().endswith(('.jpg', '.png')):
+                img_path = os.path.join(folder, fname)
+                img = cv2.imread(img_path)
+                _, predictions = process_frame(img, use_buffer=False)
+                for box_str, pred in predictions:
+                    f.write(f"{fname},{box_str},{pred}\n")
+    print(f"Saved predictions to: {output_path}")
 
 def process_image():
     path = filedialog.askopenfilename(title="Select an image")
     if not path:
         return
     img = cv2.imread(path)
-    result = process_frame(img, use_buffer=False) # Disable buffer for single image
+    result, predictions = process_frame(img, use_buffer=False)
     cv2.imshow("Image Result", result)
+    print("Predictions:", predictions)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
@@ -164,7 +179,7 @@ def process_video():
         ret, frame = cap.read()
         if not ret:
             break
-        result = process_frame(frame)
+        result, _ = process_frame(frame)
         resized_result = cv2.resize(result, (960, 540))
         cv2.imshow("Video Result", resized_result)
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -180,13 +195,57 @@ def process_realtime():
     while True:
         img = np.array(sct.grab(display_monitor))
         frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-        result = process_frame(frame, frame_idx)
+        result, _ = process_frame(frame, frame_idx)
         frame_idx += 1
         cv2.imshow('Pipeline', result)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     cv2.destroyAllWindows()
 
+def process_folder_with_verification():
+    folder = filedialog.askdirectory(title="Select Folder of Images")
+    if not folder:
+        return
+    predictions = []
+    
+    for fname in sorted(os.listdir(folder)):
+        if fname.lower().endswith(('.jpg', '.png')):
+            img_path = os.path.join(folder, fname)
+            img = cv2.imread(img_path)
+            display_img, preds = process_frame(img, use_buffer=False)
+
+            for (box_str, pred_text) in preds:
+                x1, y1, x2, y2 = map(int, box_str.split(','))
+                cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(display_img, pred_text, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            cv2.imshow('Prediction Review', display_img)
+            print(f"Image: {fname} Prediction: {pred_text}")
+            key = cv2.waitKey(0)
+
+            if key == ord('y'):
+                correctness = 'Correct'
+            elif key == ord('n'):
+                correctness = 'Incorrect'
+            else:
+                correctness = 'Skipped'
+
+            for (_, pred_text) in preds:
+                predictions.append([fname, pred_text, correctness])
+    cv2.destroyAllWindows()
+
+    output_csv = os.path.join(folder, "manual_verification_results.csv")
+    with open(output_csv, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Image", "Prediction", "Correctness"])
+        writer.writerows(predictions)
+
+    total = len([row for row in predictions if row[2] != 'Skipped'])
+    correct = len([row for row in predictions if row[2] == 'Correct'])
+    acc = correct / total if total > 0 else 0.0
+    print(f"Manual Accuracy: {acc:.2%} ({correct}/{total})")
+
+# === Updated GUI Entry ===
 def main_gui():
     def on_select(event=None):
         mode = combo.get()
@@ -196,7 +255,9 @@ def main_gui():
             process_video()
         elif mode.lower() == 'realtime':
             process_realtime()
-        combo.set('Select mode')  # reset dropdown for next selection
+        elif mode.lower() == 'folder':
+            process_folder_with_verification()
+        combo.set('Select mode')
 
     def on_quit():
         root.quit()
@@ -208,7 +269,7 @@ def main_gui():
     label = tk.Label(root, text="Select detection mode:")
     label.pack(pady=10)
 
-    combo = ttk.Combobox(root, values=["Image", "Video", "Realtime"], state="readonly")
+    combo = ttk.Combobox(root, values=["Image", "Video", "Realtime", "Folder"], state="readonly")
     combo.pack(padx=20, pady=5)
     combo.bind("<<ComboboxSelected>>", on_select)
 
@@ -221,3 +282,4 @@ if __name__ == '__main__':
     while True:
         main_gui()
         break
+
