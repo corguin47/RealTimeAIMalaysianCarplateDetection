@@ -2,7 +2,7 @@ import pandas as pd
 import editdistance
 
 # Load predictions
-df = pd.read_csv(r"D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\BeamSearch+WeightedSampler\test_predictions.csv")
+df = pd.read_csv(r"D:\RealTimeAIMalaysianCarplateDetection\CarPlateForOCR\SecondApproach\CRNN\Models\Greedy+WeightedSampler\test_predictions.csv")
 
 # CER: average normalized edit distance per sample
 cers = [

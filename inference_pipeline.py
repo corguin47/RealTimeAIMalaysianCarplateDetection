@@ -180,7 +180,11 @@ def process_video():
         if not ret:
             break
         result, _ = process_frame(frame)
-        resized_result = cv2.resize(result, (960, 540))
+        scale_percent = 60 
+        width = int(result.shape[1] * scale_percent / 100)
+        height = int(result.shape[0] * scale_percent / 100)
+        dim = (width, height)
+        resized_result = cv2.resize(result, dim)
         cv2.imshow("Video Result", resized_result)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
@@ -188,7 +192,7 @@ def process_video():
     cv2.destroyAllWindows()
 
 def process_realtime():
-    display_monitor = {"top": 100, "left": 100, "width": 800, "height": 600}
+    display_monitor = {"top": 100, "left": 100, "width": 800, "height": 500}
     sct = mss.mss()
     cv2.namedWindow('Pipeline', cv2.WINDOW_NORMAL)
     frame_idx = 0
